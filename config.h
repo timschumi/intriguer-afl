@@ -1,5 +1,5 @@
 /*
-   american fuzzy lop - vaguely configurable bits
+   american fuzzy lop plus plus - vaguely configurable bits
    ----------------------------------------------
 
    Written and maintained by Michal Zalewski <lcamtuf@google.com>
@@ -21,7 +21,7 @@
 
 /* Version string: */
 
-#define VERSION             "2.52b"
+#define VERSION             "++2.52c"
 
 /******************************************************
  *                                                    *

@@ -480,7 +480,7 @@ int main(int argc, char** argv) {
 
   if (isatty(2) && !getenv("AFL_QUIET")) {
 
-    SAYF(cCYA "afl-as " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
+    SAYF(cCYA "afl-as" VERSION cRST " by <lcamtuf@google.com>\n");
  
   } else be_quiet = 1;
 
@@ -525,7 +525,8 @@ int main(int argc, char** argv) {
 
   if (getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) {
     sanitizer = 1;
-    inst_ratio /= 3;
+    if (!getenv("AFL_INST_RATIO"))
+      inst_ratio /= 3;
   }
 
   if (!just_version) add_instrumentation();

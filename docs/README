@@ -1,8 +1,17 @@
-==================
-american fuzzy lop
-==================
+============================
+american fuzzy lop plus plus
+============================
 
-  Written and maintained by Michal Zalewski <lcamtuf@google.com>
+  Written by Michal Zalewski <lcamtuf@google.com>
+
+  Repository: https://github.com/vanhauser-thc/afl++
+
+  afl++ is maintained by Marc Heuse <mh@mh-sec.de> as there have been
+  no updates to afl since November 2017.
+
+  This version has several bug fixes, new features and speed enhancements
+  based on patches from https://github.com/vanhauser-thc/afl-patches
+  To see the list of which patches have been applied, see the PATCHES file.
 
   Copyright 2013, 2014, 2015, 2016 Google Inc. All rights reserved.
   Released under terms and conditions of Apache License, Version 2.0.
@@ -103,6 +112,10 @@ For C++ programs, you'd would also want to set CXX=/path/to/afl/afl-g++.
 The clang wrappers (afl-clang and afl-clang++) can be used in the same way;
 clang users may also opt to leverage a higher-performance instrumentation mode,
 as described in llvm_mode/README.llvm.
+Clang/LLVM has a much better performance, but only works with LLVM up to and
+including 6.0.
+Using the LAF Intel performance enhancements are also recommended, see 
+docs/README.laf-intel
 
 When testing libraries, you need to find or write a simple program that reads
 data from stdin or from a file and passes it to the tested library. In such a

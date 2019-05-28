@@ -98,6 +98,8 @@ static void __afl_start_forkserver(void) {
   s32 child_pid;
 
   u8  child_stopped = 0;
+  
+  void (*old_sigchld_handler)(int) = signal(SIGCHLD, SIG_DFL);
 
   /* Phone home and tell the parent that we're OK. If parent isn't there,
      assume we're not running in forkserver mode and just execute program. */
@@ -132,6 +134,7 @@ static void __afl_start_forkserver(void) {
       /* In child process: close fds, resume execution. */
 
       if (!child_pid) {
+        signal(SIGCHLD, old_sigchld_handler);
 
         close(FORKSRV_FD);
         close(FORKSRV_FD + 1);

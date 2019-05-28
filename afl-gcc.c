@@ -303,7 +303,7 @@ int main(int argc, char** argv) {
 
   if (isatty(2) && !getenv("AFL_QUIET")) {
 
-    SAYF(cCYA "afl-cc " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
+    SAYF(cCYA "afl-cc" VERSION cRST " by <lcamtuf@google.com>\n");
 
   } else be_quiet = 1;
 
