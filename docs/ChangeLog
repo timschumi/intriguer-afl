@@ -883,10 +883,10 @@ Version 1.74b:
 Version 1.73b:
 --------------
 
-  - Fixed a pretty stupid bug in effector maps that could sometimes cause
-    AFL to fuzz slightly more than necessary; and in very rare circumstances,
-    could lead to SEGV if eff_map is aligned with page boundary and followed
-    by an unmapped page. Spotted by Jonathan Gray.
+  - Fixed a bug in effector maps that could sometimes cause AFL to fuzz slightly
+    more than necessary; and in very rare circumstances, could lead to SEGV if
+    eff_map is aligned with page boundary and followed by an unmapped page.
+    Spotted by Jonathan Gray.
 
 --------------
 Version 1.72b:
