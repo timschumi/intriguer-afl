@@ -114,8 +114,8 @@
 /* Probabilities of skipping non-favored entries in the queue, expressed as
    percentages: */
 
-#define SKIP_TO_NEW_PROB    99 /* ...when there are new, pending favorites */
-#define SKIP_NFAV_OLD_PROB  95 /* ...no new favs, cur entry already fuzzed */
+#define SKIP_TO_NEW_PROB    100 /* ...when there are new, pending favorites */
+#define SKIP_NFAV_OLD_PROB  100 /* ...no new favs, cur entry already fuzzed */
 #define SKIP_NFAV_NEW_PROB  75 /* ...no new favs, cur entry not fuzzed yet */
 
 /* Splicing cycle count: */
@@ -128,7 +128,7 @@
 
 /* Maximum offset for integer addition / subtraction stages: */
 
-#define ARITH_MAX           35
+#define ARITH_MAX           20
 
 /* Limits for the test case trimmer. The absolute minimum chunk size; and
    the starting and ending divisors for chopping up the input file: */
@@ -139,7 +139,7 @@
 
 /* Maximum size of input file, in bytes (keep under 100MB): */
 
-#define MAX_FILE            (1 * 1024 * 1024)
+#define MAX_FILE            (10 * 1024 * 1024)
 
 /* The same, for the test case minimizer: */
 
