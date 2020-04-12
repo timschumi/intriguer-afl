@@ -188,6 +188,9 @@ static u8 *stage_name = "init",       /* Name of the current fuzz stage   */
           *syncing_party;             /* Currently syncing with...        */
 
 static s32 stage_cur, stage_max;      /* Stage progression                */
+
+static s32 stage_count;
+
 static s32 splicing_with = -1;        /* Splicing with which test case?   */
 
 static u32 master_id, master_max;     /* Master instance job splitting    */
@@ -244,6 +247,10 @@ struct queue_entry {
   u8* trace_mini;                     /* Trace bytes, if kept             */
   u32 tc_ref;                         /* Trace bytes ref count            */
 
+  struct st_field** fields;
+
+  u32 field_count;
+
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
 
@@ -277,6 +284,28 @@ static s8  interesting_8[]  = { INTERESTING_8 };
 static s16 interesting_16[] = { INTERESTING_8, INTERESTING_16 };
 static s32 interesting_32[] = { INTERESTING_8, INTERESTING_16, INTERESTING_32 };
 
+struct st_field{
+  u32 start;
+  u32 size;
+  u32 type;
+  u32 value_count;
+  u32 marker_count;
+  u32 constraint_count;
+  u32 condition_boundary_count;
+  u32 interest_count;
+  u64* values;
+  u8** markers;
+  u8** constraints;
+  u8** condition_boundaries;
+  u8** interests;
+};
+
+struct st_mutation_value{
+  u32 start;
+  u32 size;
+  u64 value;
+};
+
 /* Fuzzing stages */
 
 enum {
@@ -296,7 +325,11 @@ enum {
   /* 13 */ STAGE_EXTRAS_UI,
   /* 14 */ STAGE_EXTRAS_AO,
   /* 15 */ STAGE_HAVOC,
-  /* 16 */ STAGE_SPLICE
+  /* 16 */ STAGE_SPLICE,
+  /* 17 */ STAGE_FIELDM,
+  /* 18 */ STAGE_FIELDC,
+  /* 19 */ STAGE_FIELDB,
+  /* 20 */ STAGE_FIELDI
 };
 
 /* Stage value types */
@@ -318,6 +351,242 @@ enum {
   /* 05 */ FAULT_NOBITS
 };
 
+char *intriguer_path;
+
+const u32 intriguer_timeout = 90;
+
+void get_mutation_value(char* out, char* value, int start, int size){
+  u64 temp = strtoull(value, NULL, 16);
+
+  u8 b[16];
+  memset(&b, 0, 16);
+
+  int i;
+  for(i = 0; i < size; i++)
+  {
+    b[size-1-i] = ((u8*)&temp)[i];
+  }
+
+  memcpy(out, (u8*)b, size);
+}
+
+void get_mutation_values(struct st_mutation_value* mt, char* value, int start, int size){
+  char* tmp;
+
+  tmp = strtok(value, "_");
+
+  if(*tmp == 'x'){
+    mt->start = start;
+  } else{
+    mt->start = atoi(tmp);
+  }
+
+  tmp = strtok(NULL, "_");
+
+  if(*tmp == 'x'){
+    mt->size = size;
+  } else{
+    mt->size = atoi(tmp);
+  }
+
+  tmp = strtok(NULL, "_");
+  
+  u64 temp = strtoull(tmp, NULL, 16);
+
+  u8 b[16];
+  memset(&b, 0, 16);
+
+  int i;
+  for(i = 0; i < mt->size; i++){
+    b[mt->size-1-i] = ((u8*)&temp)[i];
+  }
+
+  memcpy((char*)&mt->value, (u8*)b, mt->size);
+}
+
+u32 get_multi_values(char* values, u8*** pdest, int size){
+  u8* value;
+  u32 count=0;
+  u8** dest = *pdest;
+
+  if(*values == '\0' || *values == '\n')
+    return count;
+
+  value = strtok(values, ",");
+
+  if(value == NULL)
+    return count;
+
+  count = 1;
+
+  dest[0] = malloc(strlen(value)+1);
+  memset(dest[0], 0, strlen(value)+1);
+
+  memcpy(dest[0], (u8*)value, strlen(value)+1);
+
+  while(value != NULL){
+    value = strtok(NULL, ",");
+
+    if(value == NULL)
+      break;
+
+    if(!strcmp(value, ""))
+      break;
+
+    count++;
+
+    *pdest = realloc(dest, sizeof(u8*) * count);
+    dest = *pdest;
+    dest[count-1] = malloc(strlen(value)+1);
+
+    memset(dest[count-1], 0, strlen(value)+1);
+
+    memcpy(dest[count-1], (u8*)value, strlen(value)+1);
+  }
+
+  return count;
+}
+
+u32 get_values(char* values, u8*** pdest, int size){
+  u8* value;
+  u32 count=0;
+  u8** dest = *pdest;
+
+  if(*values == '\0' || *values == '\n')
+    return count;
+
+  value = strtok(values, ",");
+
+  if(value == NULL)
+    return count;
+
+  count = 1;
+
+  dest[0] = malloc(32);
+  memset(dest[0], 0, 32);
+
+  u64 temp = strtoull(value, NULL, 16);
+
+  u8 b[16];
+  memset(&b, 0, 16);
+
+  for(int i = 0; i < size; i++){
+    b[size-1-i] = ((u8*)&temp)[i];
+  }
+
+  memcpy(dest[0], (u8*)b, size);
+
+  while(value != NULL){
+    value = strtok(NULL, ",");
+
+    if(value == NULL)
+      break;
+
+    if(!strcmp(value, ""))
+      break;
+
+    count++;
+
+    *pdest = realloc(dest, sizeof(u8*) * count);
+    dest = *pdest;
+    dest[count-1] = malloc(32);
+
+    memset(dest[count-1], 0, 32);
+
+
+    u64 temp = strtoull(value, NULL, 16);
+
+    u8 b[16];
+    memset(&b, 0, 16);
+
+    for(int i = 0; i < size; i++)
+    {
+      b[size-1-i] = ((u8*)&temp)[i];
+    }
+
+    memcpy(dest[count-1], (u8*)b, size);
+
+  }
+
+  return count;
+}
+
+struct st_field** read_field_file(u8* field_file, u32* pfield_count){
+  FILE* fp;
+  u8* line = NULL;
+  struct st_field** fields = NULL;
+
+  size_t len = 0;
+  ssize_t read;
+  u8* ptr;
+  u8* marker, *cons, *con_boundary, *interest;
+  u32 field_count = 0;
+
+  fp = fopen(field_file, "r");
+
+  if(fp == NULL)   FATAL("Failed to read offset file.");
+
+  while ((read = getline((char**)&line, &len, fp)) != -1) {
+
+    if(fields == NULL){
+      fields = (struct st_field**) malloc(sizeof(struct st_field*));
+    }
+    else
+    {
+      fields = (struct st_field**) realloc(fields, sizeof(struct st_field*) * (field_count+1));
+    }
+
+    fields[field_count] = (struct st_field*) malloc(sizeof(struct st_field));
+
+    ptr = strtok(line, "\t");
+
+    fields[field_count]->start = atoi(ptr);
+
+    ptr = strtok(NULL, "\t");
+
+    fields[field_count]->size = atoi(ptr);
+
+    marker = strtok(NULL, "\t");
+    
+    cons = strtok(NULL, "\t");
+
+    con_boundary = strtok(NULL, "\t");
+
+    interest = strtok(NULL, "\t");
+
+    fields[field_count]->marker_count = 0;
+    fields[field_count]->constraint_count = 0;
+    fields[field_count]->condition_boundary_count = 0;
+    fields[field_count]->interest_count = 0;
+
+    if(fields[field_count]->size <= 8){
+
+      fields[field_count]->markers = malloc(sizeof(u8*));
+      fields[field_count]->constraints = malloc(sizeof(u8*));
+      fields[field_count]->condition_boundaries = malloc(sizeof(u8*));
+      fields[field_count]->interests = malloc(sizeof(u8*));
+
+      memset(fields[field_count]->markers, 0, sizeof(u8*));
+      memset(fields[field_count]->constraints, 0, sizeof(u8*));
+      memset(fields[field_count]->condition_boundaries, 0, sizeof(u8*));
+      memset(fields[field_count]->interests, 0, sizeof(u8*));
+
+      fields[field_count]->marker_count = get_values(marker+1, &fields[field_count]->markers, fields[field_count]->size);
+      fields[field_count]->constraint_count = get_multi_values(cons+1, &fields[field_count]->constraints, fields[field_count]->size);
+      fields[field_count]->condition_boundary_count = get_values(con_boundary+1, &fields[field_count]->condition_boundaries, fields[field_count]->size);
+      fields[field_count]->interest_count = get_multi_values(interest+1, &fields[field_count]->interests, fields[field_count]->size);
+
+    }
+
+    field_count++;
+  }
+
+  fclose(fp);
+
+  *pfield_count = field_count;
+
+  return fields;
+}
 
 /* Get unix time in milliseconds */
 
@@ -778,6 +1047,8 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
+  q->fields       = NULL;
+  q->field_count  = 0;
 
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -3136,6 +3407,11 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #endif /* ^!SIMPLE_FILES */
 
+    fd = open(fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) PFATAL("Unable to create '%s'", fn);
+    ck_write(fd, mem, len, fn);
+    close(fd);
+
     add_to_queue(fn, len, 0);
 
     if (hnb == 2) {
@@ -3152,11 +3428,6 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
     if (res == FAULT_ERROR)
       FATAL("Unable to execute target application");
-
-    fd = open(fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    if (fd < 0) PFATAL("Unable to create '%s'", fn);
-    ck_write(fd, mem, len, fn);
-    close(fd);
 
     keeping = 1;
 
@@ -3721,6 +3992,10 @@ static void maybe_delete_out_dir(void) {
   if (delete_files(fn, CASE_PREFIX)) goto dir_cleanup_failed;
   ck_free(fn);
 
+  fn = alloc_printf("%s/field", out_dir);
+  if (delete_files(fn, NULL)) goto dir_cleanup_failed;
+  ck_free(fn);
+
   /* All right, let's do <out_dir>/crashes/id:* and <out_dir>/hangs/id:*. */
 
   if (!in_place_resume) {
@@ -3934,6 +4209,8 @@ static void show_stats(void) {
   /* If we're not on TTY, bail out. */
 
   if (not_on_tty) return;
+
+  if (getenv("INTRIGUER_SIMPLE_REPORT") != NULL) return;
 
   /* Compute some mildly useful bitmap stats. */
 
@@ -4214,6 +4491,15 @@ static void show_stats(void) {
   SAYF(bV bSTOP "  dictionary : " cRST "%-37s " bSTG bV bSTOP
        "  imported : " cRST "%-10s " bSTG bV "\n", tmp,
        sync_id ? DI(queued_imported) : (u8*)"n/a");
+
+  sprintf(tmp, "%s/%s, %s/%s, %s/%s, %s/%s",
+            DI(stage_finds[STAGE_FIELDM]), DI(stage_cycles[STAGE_FIELDM]),
+            DI(stage_finds[STAGE_FIELDC]), DI(stage_cycles[STAGE_FIELDC]),
+            DI(stage_finds[STAGE_FIELDB]), DI(stage_cycles[STAGE_FIELDB]),
+            DI(stage_finds[STAGE_FIELDI]), DI(stage_cycles[STAGE_FIELDI]));
+
+  SAYF(bV bSTOP "      fields : " cRST "%-37s " bSTG bV bSTOP "  pend fav : "
+       cRST "%-10s " bSTG bV "\n", tmp, DI(pending_favored));
 
   sprintf(tmp, "%s/%s, %s/%s",
           DI(stage_finds[STAGE_HAVOC]), DI(stage_cycles[STAGE_HAVOC]),
@@ -4925,6 +5211,9 @@ static u8 fuzz_one(char** argv) {
   u8  a_collect[MAX_AUTO_EXTRA];
   u32 a_len = 0;
 
+  struct st_field** fields;
+  u32 field_count;
+
 #ifdef IGNORE_FINDS
 
   /* In IGNORE_FINDS mode, skip any entries that weren't in the
@@ -5017,31 +5306,59 @@ static u8 fuzz_one(char** argv) {
 
   }
 
+  memcpy(out_buf, in_buf, len);
+
   /************
-   * TRIMMING *
+   * RUN INTRIGUER *
    ************/
 
-  if (!dumb_mode && !queue_cur->trim_done) {
+  char* fname = alloc_printf("%s", queue_cur->fname);
+  char* field_name = alloc_printf("%s/field/%06u", out_dir, current_entry);
 
-    u8 res = trim_case(argv, queue_cur, in_buf);
+  char template[] = "/tmp/tmpdir.XXXXXX";
+  char *temp_dir = mkdtemp(template);
 
-    if (res == FAULT_ERROR)
-      FATAL("Unable to execute target application");
-
-    if (stop_soon) {
-      cur_skipped_paths++;
-      goto abandon_entry;
+  if(access(field_name, F_OK) == -1 && pending_not_fuzzed != 0) {
+    if(pending_not_fuzzed == 0){
+      setenv("INTRIGUER_REDUCTION_THRESHOLD", "1024", 1);
+    }
+    else{
+      setenv("INTRIGUER_REDUCTION_THRESHOLD", "16", 1);
     }
 
-    /* Don't retry trimming, even if it failed. */
+    printf("\n\nGenerating field file: %s/field/%06u ... \n", out_dir, current_entry);
+  
+    u8 *cmd, *intriguer_cmd;
 
-    queue_cur->trim_done = 1;
+    intriguer_cmd = alloc_printf("%s", getenv("INTRIGUER_CMD"));
 
-    if (len != queue_cur->len) len = queue_cur->len;
+    cmd = alloc_printf("python %s -s 1 -t %d -i %s -o %s -- %s > /dev/null 2> /dev/null",
+        intriguer_path, intriguer_timeout, fname, temp_dir, intriguer_cmd);
 
+    // printf("cmd: %s\n", cmd);
+    system(cmd);
+    
+    ck_free(intriguer_cmd);
+    ck_free(cmd);
+
+    cmd = alloc_printf("cp %s/field.out %s", temp_dir, field_name);
+
+    // printf("cmd: %s\n", cmd);
+    system(cmd);
+    ck_free(cmd);
+
+    cmd = alloc_printf("rm -r %s", temp_dir);
+
+    system(cmd);
+    ck_free(cmd);
   }
 
-  memcpy(out_buf, in_buf, len);
+  if(queue_cur->fields == NULL)
+    queue_cur->fields = read_field_file(field_name, &(queue_cur->field_count));
+
+  ck_free(field_name);
+  ck_free(fname);
+
 
   /*********************
    * PERFORMANCE SCORE *
@@ -5064,6 +5381,8 @@ static u8 fuzz_one(char** argv) {
 
   doing_det = 1;
 
+  goto field_stage;
+
   /*********************************************
    * SIMPLE BITFLIP (+dictionary construction) *
    *********************************************/
@@ -5080,21 +5399,27 @@ static u8 fuzz_one(char** argv) {
   stage_max   = len << 3;
   stage_name  = "bitflip 1/1";
 
+  stage_cur   = 0;
   stage_val_type = STAGE_VAL_NONE;
+  stage_count = 0;
 
   orig_hit_cnt = queued_paths + unique_crashes;
 
   prev_cksum = queue_cur->exec_cksum;
 
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+  for (i = 0; i < (len << 3) ; i++) {
 
-    stage_cur_byte = stage_cur >> 3;
+    stage_cur_byte = i >> 3;
 
-    FLIP_BIT(out_buf, stage_cur);
+
+    stage_cur++;
+    stage_count++;
+
+    FLIP_BIT(out_buf, i);
 
     if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
-    FLIP_BIT(out_buf, stage_cur);
+    FLIP_BIT(out_buf, i);
 
     /* While flipping the least significant bit in every byte, pull of an extra
        trick to detect possible syntax tokens. In essence, the idea is that if
@@ -5123,16 +5448,16 @@ static u8 fuzz_one(char** argv) {
 
       */
 
-    if (!dumb_mode && (stage_cur & 7) == 7) {
+    if (0 && !dumb_mode && (i & 7) == 7) {
 
       u32 cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
 
-      if (stage_cur == stage_max - 1 && cksum == prev_cksum) {
+      if (i == stage_max - 1 && cksum == prev_cksum) {
 
         /* If at end of file and we are still collecting a string, grab the
            final character and force output. */
 
-        if (a_len < MAX_AUTO_EXTRA) a_collect[a_len] = out_buf[stage_cur >> 3];
+        if (a_len < MAX_AUTO_EXTRA) a_collect[a_len] = out_buf[i >> 3];
         a_len++;
 
         if (a_len >= MIN_AUTO_EXTRA && a_len <= MAX_AUTO_EXTRA)
@@ -5156,7 +5481,7 @@ static u8 fuzz_one(char** argv) {
 
       if (cksum != queue_cur->exec_cksum) {
 
-        if (a_len < MAX_AUTO_EXTRA) a_collect[a_len] = out_buf[stage_cur >> 3];        
+        if (a_len < MAX_AUTO_EXTRA) a_collect[a_len] = out_buf[i >> 3];        
         a_len++;
 
       }
@@ -5168,65 +5493,75 @@ static u8 fuzz_one(char** argv) {
   new_hit_cnt = queued_paths + unique_crashes;
 
   stage_finds[STAGE_FLIP1]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP1] += stage_max;
+  stage_cycles[STAGE_FLIP1] += stage_count;
 
   /* Two walking bits. */
 
   stage_name  = "bitflip 2/1";
   stage_short = "flip2";
   stage_max   = (len << 3) - 1;
+  stage_cur   = 0;
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+  for (i = 0; i < (len<<3)-1; i++) {
 
-    stage_cur_byte = stage_cur >> 3;
+    stage_cur_byte = i >> 3;
 
-    FLIP_BIT(out_buf, stage_cur);
-    FLIP_BIT(out_buf, stage_cur + 1);
+    stage_count++;
+    stage_cur++;
+
+    FLIP_BIT(out_buf, i);
+    FLIP_BIT(out_buf, i + 1);
 
     if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
-    FLIP_BIT(out_buf, stage_cur);
-    FLIP_BIT(out_buf, stage_cur + 1);
+    FLIP_BIT(out_buf, i);
+    FLIP_BIT(out_buf, i + 1);
 
   }
 
   new_hit_cnt = queued_paths + unique_crashes;
 
   stage_finds[STAGE_FLIP2]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP2] += stage_max;
+  stage_cycles[STAGE_FLIP2] += stage_count;
 
   /* Four walking bits. */
 
   stage_name  = "bitflip 4/1";
   stage_short = "flip4";
   stage_max   = (len << 3) - 3;
+  stage_cur   = 0;
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+  for (i = 0; i < (len << 3) - 3; i++) {
 
-    stage_cur_byte = stage_cur >> 3;
+    stage_cur_byte = i >> 3;
 
-    FLIP_BIT(out_buf, stage_cur);
-    FLIP_BIT(out_buf, stage_cur + 1);
-    FLIP_BIT(out_buf, stage_cur + 2);
-    FLIP_BIT(out_buf, stage_cur + 3);
+    stage_count++;
+    stage_cur++;
+
+    FLIP_BIT(out_buf, i);
+    FLIP_BIT(out_buf, i + 1);
+    FLIP_BIT(out_buf, i + 2);
+    FLIP_BIT(out_buf, i + 3);
 
     if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
-    FLIP_BIT(out_buf, stage_cur);
-    FLIP_BIT(out_buf, stage_cur + 1);
-    FLIP_BIT(out_buf, stage_cur + 2);
-    FLIP_BIT(out_buf, stage_cur + 3);
+    FLIP_BIT(out_buf, i);
+    FLIP_BIT(out_buf, i + 1);
+    FLIP_BIT(out_buf, i + 2);
+    FLIP_BIT(out_buf, i + 3);
 
   }
 
   new_hit_cnt = queued_paths + unique_crashes;
 
   stage_finds[STAGE_FLIP4]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP4] += stage_max;
+  stage_cycles[STAGE_FLIP4] += stage_count;
 
   /* Effector map setup. These macros calculate:
 
@@ -5257,14 +5592,19 @@ static u8 fuzz_one(char** argv) {
   stage_name  = "bitflip 8/8";
   stage_short = "flip8";
   stage_max   = len;
+  stage_cur   = 0;
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+  for (i = 0; i < len; i++) {
 
-    stage_cur_byte = stage_cur;
+    stage_cur_byte = i;
 
-    out_buf[stage_cur] ^= 0xFF;
+    stage_count++;
+    stage_cur++;
+
+    out_buf[i] ^= 0xFF;
 
     if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
@@ -5273,7 +5613,7 @@ static u8 fuzz_one(char** argv) {
        even when fully flipped - and we skip them during more expensive
        deterministic stages, such as arithmetics or known ints. */
 
-    if (!eff_map[EFF_APOS(stage_cur)]) {
+    if (!eff_map[EFF_APOS(i)]) {
 
       u32 cksum;
 
@@ -5286,13 +5626,13 @@ static u8 fuzz_one(char** argv) {
         cksum = ~queue_cur->exec_cksum;
 
       if (cksum != queue_cur->exec_cksum) {
-        eff_map[EFF_APOS(stage_cur)] = 1;
+        eff_map[EFF_APOS(i)] = 1;
         eff_cnt++;
       }
 
     }
 
-    out_buf[stage_cur] ^= 0xFF;
+    out_buf[i] ^= 0xFF;
 
   }
 
@@ -5318,7 +5658,7 @@ static u8 fuzz_one(char** argv) {
   new_hit_cnt = queued_paths + unique_crashes;
 
   stage_finds[STAGE_FLIP8]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP8] += stage_max;
+  stage_cycles[STAGE_FLIP8] += stage_count;
 
   /* Two walking bytes. */
 
@@ -5328,19 +5668,16 @@ static u8 fuzz_one(char** argv) {
   stage_short = "flip16";
   stage_cur   = 0;
   stage_max   = len - 1;
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
   for (i = 0; i < len - 1; i++) {
 
-    /* Let's consult the effector map... */
-
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)]) {
-      stage_max--;
-      continue;
-    }
-
     stage_cur_byte = i;
+
+    stage_count++;
+
 
     *(u16*)(out_buf + i) ^= 0xFFFF;
 
@@ -5355,7 +5692,7 @@ static u8 fuzz_one(char** argv) {
   new_hit_cnt = queued_paths + unique_crashes;
 
   stage_finds[STAGE_FLIP16]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP16] += stage_max;
+  stage_cycles[STAGE_FLIP16] += stage_count;
 
   if (len < 4) goto skip_bitflip;
 
@@ -5365,19 +5702,15 @@ static u8 fuzz_one(char** argv) {
   stage_short = "flip32";
   stage_cur   = 0;
   stage_max   = len - 3;
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
   for (i = 0; i < len - 3; i++) {
 
-    /* Let's consult the effector map... */
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)] &&
-        !eff_map[EFF_APOS(i + 2)] && !eff_map[EFF_APOS(i + 3)]) {
-      stage_max--;
-      continue;
-    }
-
     stage_cur_byte = i;
+
+    stage_count++;
 
     *(u32*)(out_buf + i) ^= 0xFFFFFFFF;
 
@@ -5391,7 +5724,7 @@ static u8 fuzz_one(char** argv) {
   new_hit_cnt = queued_paths + unique_crashes;
 
   stage_finds[STAGE_FLIP32]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP32] += stage_max;
+  stage_cycles[STAGE_FLIP32] += stage_count;
 
 skip_bitflip:
 
@@ -5405,6 +5738,7 @@ skip_bitflip:
   stage_short = "arith8";
   stage_cur   = 0;
   stage_max   = 2 * len * ARITH_MAX;
+  stage_count = 0;
 
   stage_val_type = STAGE_VAL_LE;
 
@@ -5471,19 +5805,13 @@ skip_bitflip:
   stage_short = "arith16";
   stage_cur   = 0;
   stage_max   = 4 * (len - 1) * ARITH_MAX;
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
   for (i = 0; i < len - 1; i++) {
 
     u16 orig = *(u16*)(out_buf + i);
-
-    /* Let's consult the effector map... */
-
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)]) {
-      stage_max -= 4 * ARITH_MAX;
-      continue;
-    }
 
     stage_cur_byte = i;
 
@@ -5565,6 +5893,7 @@ skip_bitflip:
   stage_short = "arith32";
   stage_cur   = 0;
   stage_max   = 4 * (len - 3) * ARITH_MAX;
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
@@ -5659,6 +5988,7 @@ skip_arith:
   stage_short = "int8";
   stage_cur   = 0;
   stage_max   = len * sizeof(interesting_8);
+  stage_count = 0;
 
   stage_val_type = STAGE_VAL_LE;
 
@@ -5714,6 +6044,7 @@ skip_arith:
   stage_short = "int16";
   stage_cur   = 0;
   stage_max   = 2 * (len - 1) * (sizeof(interesting_16) >> 1);
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
@@ -5782,6 +6113,7 @@ skip_arith:
   stage_short = "int32";
   stage_cur   = 0;
   stage_max   = 2 * (len - 3) * (sizeof(interesting_32) >> 2);
+  stage_count = 0;
 
   orig_hit_cnt = new_hit_cnt;
 
@@ -6022,6 +6354,330 @@ skip_extras:
    ****************/
 
 havoc_stage:
+
+  if (queue_cur->passed_det) goto field_end;
+
+field_stage:
+
+  fields = queue_cur->fields;
+  field_count = queue_cur->field_count;
+  /**********************
+   * Field Mutation *
+   **********************/
+
+  /* field marker. */
+
+  stage_name  = "field m";
+  stage_short = "fieldm";
+  stage_cur   = 0;
+  stage_max   = 0;
+
+  stage_val_type = STAGE_VAL_LE;
+
+  orig_hit_cnt = queued_paths + unique_crashes;
+
+  for (i = 0; i < field_count; i++) {
+    u8 orig[32];
+    if(fields[i]==NULL) continue;
+
+    u32 start = fields[i]->start;
+    stage_cur_byte = start;
+
+    if(fields[i]->start == -1) continue;
+    if(fields[i]->start >= len) continue;
+    if(fields[i]->size > 8) continue;
+
+    memcpy(orig, out_buf+start, fields[i]->size);
+
+    u8** values = fields[i]->markers;
+    if(values==NULL) continue;
+
+    for(j=0; j < fields[i]->marker_count; j++){
+     if(values[j]==NULL) break;
+
+      memcpy(out_buf+start, values[j], fields[i]->size);
+    
+      if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+    
+      stage_cur++;
+      stage_max++;
+
+      memcpy(out_buf+start, orig, fields[i]->size);
+      
+    } 
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_FIELDM]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_FIELDM] += stage_max;
+
+
+  /* field constraint. */
+
+  u8* value;
+
+  stage_name  = "field c";
+  stage_short = "fieldc";
+  stage_cur   = 0;
+  stage_max   = field_count;
+
+  stage_val_type = STAGE_VAL_LE;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (i = 0; i < field_count; i++) {
+    u8 orig[32];
+    u8 origs[16][32];
+
+    if(fields[i]==NULL) continue;
+    u32 start = fields[i]->start;
+
+    stage_cur_byte = start;
+
+    if(fields[i]->start == -1) continue;
+    if(fields[i]->start >= len) continue;
+    if(fields[i]->size > 8) continue;
+
+    memcpy(orig, out_buf+start, fields[i]->size);
+
+    u8** values = fields[i]->constraints;
+    if(values==NULL) continue;
+
+    for(j=0; j < fields[i]->constraint_count; j++){
+
+     if(values[j]==NULL) continue;
+
+           if(memcmp(values[j], ":", 1)){
+        char mvalue[32];
+
+        get_mutation_value(mvalue, values[j], fields[i]->start, fields[i]->size);
+
+        memcpy(out_buf+start, mvalue, fields[i]->size);
+
+        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+      
+        stage_cur++;
+        stage_max++;
+
+        memcpy(out_buf+start, orig, fields[i]->size);
+      } 
+      // multi mutation value
+      else {
+        struct st_mutation_value mt[16];
+        char* value_line[16];
+        int c = 0;
+
+        value = strtok(values[j]+1, ":");
+
+        value_line[0] = malloc(strlen(value)+1);
+        strcpy(value_line[0], value);
+
+        c++;
+
+        while(value != NULL){
+          value = strtok(NULL, ":");
+
+          if(value == NULL)
+            break;
+
+          if(!strcmp(value, ""))
+            break;
+
+          value_line[c] = malloc(strlen(value)+1);
+          strcpy(value_line[c], value);
+
+          c++;
+        }
+
+        for(int a=0; a < c; a++){
+          if(a > 15) break;
+          get_mutation_values(&mt[a], value_line[a], fields[i]->start, fields[i]->size);
+          free(value_line[a]);
+
+          memcpy(origs[a], out_buf+mt[a].start, mt[a].size);
+          memcpy(out_buf+mt[a].start, &mt[a].value, mt[a].size);
+        }
+
+        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+
+        stage_cur++;
+        stage_max++;
+
+        for(int a=0; a < c; a++){
+          if(a > 15) break;
+
+          memcpy(out_buf+mt[a].start, origs[a], mt[a].size);
+        }
+      }
+    } 
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_FIELDC]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_FIELDC] += stage_max;
+
+  /* field interest. */
+
+  stage_name  = "field b";
+  stage_short = "fieldb";
+  stage_cur   = 0;
+  stage_max   = field_count;
+
+  stage_val_type = STAGE_VAL_LE;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (i = 0; i < field_count; i++) {
+    u8 orig[32];
+    if(fields[i]==NULL) continue;
+    u32 start = fields[i]->start;
+
+    stage_cur_byte = start;
+
+    if(fields[i]->start == -1) continue;
+    if(fields[i]->start >= len) continue;
+    if(fields[i]->size > 8) continue;
+
+    memcpy(orig, out_buf+start, fields[i]->size);
+
+    u8** values = fields[i]->condition_boundaries;
+    if(values==NULL) continue;
+
+    for(j=0; j < fields[i]->condition_boundary_count; j++){
+
+     if(values[j]==NULL) continue;
+
+      memcpy(out_buf+start, values[j], fields[i]->size);
+    
+      //printf("\n\n\nstart: %d size: %d value: %llx\n", fields[i]->start, fields[i]->size, *(u64*)values[j]);
+      
+      if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+    
+      stage_cur++;
+      stage_max++;
+
+      memcpy(out_buf+start, orig, fields[i]->size);
+      
+
+    } 
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_FIELDB]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_FIELDB] += stage_max;
+
+  /* field interest. */
+
+  stage_name  = "field i";
+  stage_short = "fieldi";
+  stage_cur   = 0;
+  stage_max   = field_count;
+
+  stage_val_type = STAGE_VAL_LE;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (i = 0; i < field_count; i++) {
+    u8 orig[32];
+    u8 origs[16][32];
+
+    if(fields[i]==NULL) continue;
+    u32 start = fields[i]->start;
+
+    stage_cur_byte = start;
+
+    if(fields[i]->start == -1) continue;
+    if(fields[i]->start >= len) continue;
+    if(fields[i]->size > 8) continue;
+
+    memcpy(orig, out_buf+start, fields[i]->size);
+
+    u8** values = fields[i]->interests;
+    if(values==NULL) continue;
+
+    for(j=0; j < fields[i]->interest_count; j++){
+
+      if(values[j]==NULL) continue;
+
+      if(memcmp(values[j], ":", 1)){
+        char mvalue[32];
+
+        get_mutation_value(mvalue, values[j], fields[i]->start, fields[i]->size);
+
+        memcpy(out_buf+start, mvalue, fields[i]->size);
+                
+        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+      
+        stage_cur++;
+        stage_max++;
+
+        memcpy(out_buf+start, orig, fields[i]->size);
+      } 
+      // multi mutation value
+      else {
+        struct st_mutation_value mt[16];
+        char* value_line[16];
+        int c = 0;
+
+        value = strtok(values[j]+1, ":");
+
+        value_line[0] = malloc(strlen(value)+1);
+        strcpy(value_line[0], value);
+
+        c++;
+
+        while(value != NULL){
+          value = strtok(NULL, ":");
+
+          if(value == NULL)
+            break;
+
+          if(!strcmp(value, ""))
+            break;
+
+          value_line[c] = malloc(strlen(value)+1);
+          strcpy(value_line[c], value);
+
+          c++;
+        }
+
+        for(int a=0; a < c; a++){
+          if(a > 15) break;
+          get_mutation_values(&mt[a], value_line[a], fields[i]->start, fields[i]->size);
+          free(value_line[a]);
+
+          memcpy(origs[a], out_buf+mt[a].start, mt[a].size);
+          memcpy(out_buf+mt[a].start, &mt[a].value, mt[a].size);
+        }
+
+        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+
+        stage_cur++;
+        stage_max++;
+        
+        for(int a=0; a < c; a++){
+          if(a > 15) break;
+
+          memcpy(out_buf+mt[a].start, origs[a], mt[a].size);
+        }
+      }
+    }
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_FIELDI]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_FIELDI] += stage_max;
+
+field_end:
+
+  if (!queue_cur->passed_det) mark_as_det_done(queue_cur);
+
+  if (getenv("INTRIGUER_MULTICORE") != NULL)
+    goto havoc_end;
 
   stage_cur_byte = -1;
 
@@ -6567,6 +7223,8 @@ retry_splicing:
 
 #endif /* !IGNORE_FINDS */
 
+havoc_end:
+
   ret_val = 0;
 
 abandon_entry:
@@ -7083,6 +7741,12 @@ EXP_ST void setup_dirs_fds(void) {
 #endif /* !__sun */
 
   }
+
+  /* Field directory for testcase field information. */
+
+  tmp = alloc_printf("%s/field", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
 
   /* Queue directory for any starting & discovered paths. */
 
@@ -7667,6 +8331,20 @@ static void save_cmdline(u32 argc, char** argv) {
 
 #ifndef AFL_LIB
 
+static void init_intriguer() {
+  char* intriguer_root;
+  
+  intriguer_root = getenv("INTRIGUER_ROOT");
+  
+  if (intriguer_root == NULL){
+    FATAL("Failed to read INTRIGUER_ROOT.");
+  }
+
+  intriguer_path = ck_alloc(strlen(intriguer_root) + 1024);
+
+  sprintf(intriguer_path, "%s/bin/run_intriguer.py", intriguer_root);
+}
+
 /* Main entry point */
 
 int main(int argc, char** argv) {
@@ -7867,6 +8545,8 @@ int main(int argc, char** argv) {
 
   setup_signal_handlers();
   check_asan_opts();
+
+  init_intriguer();
 
   if (sync_id) fix_up_sync();
 
