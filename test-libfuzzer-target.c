@@ -1,5 +1,5 @@
 /*
-  Copyright 2014 Google LLC All rights reserved.
+  Copyright 2019 Google LLC All rights reserved.
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -16,30 +16,26 @@
 
 
 /*
-   american fuzzy lop - a trivial program to test the build
-   --------------------------------------------------------
+   american fuzzy lop - a trivial program to test libFuzzer target fuzzing.
+   ------------------------------------------------------------------------
 
-   Written and maintained by Michal Zalewski <lcamtuf@google.com>
+   Initially written and maintained by Michal Zalewski.
 */
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 
-int main(int argc, char** argv) {
-
-  char buf[8];
-
-  if (read(0, buf, 8) < 1) {
-    printf("Hum?\n");
-    exit(1);
-  }
+// TODO(metzman): Create a test/ directory to store this and other similar
+// files.
+int LLVMFuzzerTestOneInput(uint8_t* buf, size_t size) {
+  if (size < 2)
+    return 0;
 
   if (buf[0] == '0')
     printf("Looks like a zero to me!\n");
   else
     printf("A non-zero value? How quaint!\n");
 
-  exit(0);
-
+  return 0;
 }

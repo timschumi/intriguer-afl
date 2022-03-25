@@ -1,4 +1,20 @@
 /*
+  Copyright 2015 Google LLC All rights reserved.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
+
+/*
    american fuzzy lop - LLVM-mode wrapper for clang
    ------------------------------------------------
 
@@ -7,19 +23,10 @@
 
    LLVM integration design comes from Laszlo Szekeres.
 
-   Copyright 2015, 2016 Google Inc. All rights reserved.
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at:
-
-     http://www.apache.org/licenses/LICENSE-2.0
-
    This program is a drop-in replacement for clang, similar in most respects
    to ../afl-gcc. It tries to figure out compilation mode, adds a bunch
    of flags, and then calls the real compiler.
-
- */
+*/
 
 #define AFL_MAIN
 
@@ -88,7 +95,7 @@ static void find_obj(u8* argv0) {
   }
 
   FATAL("Unable to find 'afl-llvm-rt.o' or 'afl-llvm-pass.so'. Please set AFL_PATH");
- 
+
 }
 
 
@@ -96,7 +103,7 @@ static void find_obj(u8* argv0) {
 
 static void edit_params(u32 argc, char** argv) {
 
-  u8 fortify_set = 0, asan_set = 0, x_set = 0, maybe_linking = 1, bit_mode = 0;
+  u8 fortify_set = 0, asan_set = 0, x_set = 0, bit_mode = 0;
   u8 *name;
 
   cc_params = ck_alloc((argc + 128) * sizeof(u8*));
@@ -121,8 +128,10 @@ static void edit_params(u32 argc, char** argv) {
 
 #ifdef USE_TRACE_PC
   cc_params[cc_par_cnt++] = "-fsanitize-coverage=trace-pc-guard";
+#ifndef __ANDROID__
   cc_params[cc_par_cnt++] = "-mllvm";
   cc_params[cc_par_cnt++] = "-sanitizer-coverage-block-threshold=0";
+#endif
 #else
   cc_params[cc_par_cnt++] = "-Xclang";
   cc_params[cc_par_cnt++] = "-load";
@@ -132,27 +141,19 @@ static void edit_params(u32 argc, char** argv) {
 
   cc_params[cc_par_cnt++] = "-Qunused-arguments";
 
-  /* Detect stray -v calls from ./configure scripts. */
-
-  if (argc == 1 && !strcmp(argv[1], "-v")) maybe_linking = 0;
-
   while (--argc) {
     u8* cur = *(++argv);
 
     if (!strcmp(cur, "-m32")) bit_mode = 32;
+    if (!strcmp(cur, "armv7a-linux-androideabi")) bit_mode = 32;
     if (!strcmp(cur, "-m64")) bit_mode = 64;
 
     if (!strcmp(cur, "-x")) x_set = 1;
-
-    if (!strcmp(cur, "-c") || !strcmp(cur, "-S") || !strcmp(cur, "-E"))
-      maybe_linking = 0;
 
     if (!strcmp(cur, "-fsanitize=address") ||
         !strcmp(cur, "-fsanitize=memory")) asan_set = 1;
 
     if (strstr(cur, "FORTIFY_SOURCE")) fortify_set = 1;
-
-    if (!strcmp(cur, "-shared")) maybe_linking = 0;
 
     if (!strcmp(cur, "-Wl,-z,defs") ||
         !strcmp(cur, "-Wl,--no-undefined")) continue;
@@ -271,38 +272,36 @@ static void edit_params(u32 argc, char** argv) {
 #endif /* ^__APPLE__ */
     "_I(); } while (0)";
 
-  if (maybe_linking) {
+  if (x_set) {
+    cc_params[cc_par_cnt++] = "-x";
+    cc_params[cc_par_cnt++] = "none";
+  }
 
-    if (x_set) {
-      cc_params[cc_par_cnt++] = "-x";
-      cc_params[cc_par_cnt++] = "none";
-    }
+#ifndef __ANDROID__
+  switch (bit_mode) {
 
-    switch (bit_mode) {
+    case 0:
+      cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt.o", obj_path);
+      break;
 
-      case 0:
-        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt.o", obj_path);
-        break;
+    case 32:
+      cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-32.o", obj_path);
 
-      case 32:
-        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-32.o", obj_path);
+      if (access(cc_params[cc_par_cnt - 1], R_OK))
+        FATAL("-m32 is not supported by your compiler");
 
-        if (access(cc_params[cc_par_cnt - 1], R_OK))
-          FATAL("-m32 is not supported by your compiler");
+      break;
 
-        break;
+    case 64:
+      cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-64.o", obj_path);
 
-      case 64:
-        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-64.o", obj_path);
+      if (access(cc_params[cc_par_cnt - 1], R_OK))
+        FATAL("-m64 is not supported by your compiler");
 
-        if (access(cc_params[cc_par_cnt - 1], R_OK))
-          FATAL("-m64 is not supported by your compiler");
-
-        break;
-
-    }
+      break;
 
   }
+#endif
 
   cc_params[cc_par_cnt] = NULL;
 
@@ -345,7 +344,9 @@ int main(int argc, char** argv) {
   }
 
 
+#ifndef __ANDROID__
   find_obj(argv[0]);
+#endif
 
   edit_params(argc, argv);
 

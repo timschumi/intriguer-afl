@@ -297,7 +297,8 @@ wait a couple of cycles to get their chance).
 
 Next, we have the number of new paths found during this fuzzing section and
 imported from other fuzzer instances when doing parallelized fuzzing; and the
-number of inputs that produce seemingly variable behavior in the tested binary.
+extent to which identical inputs appear to sometimes produce variable behavior
+in the tested binary.
 
 That last bit is actually fairly interesting: it measures the consistency of
 observed traces. If a program always behaves the same for the same input data,
@@ -396,6 +397,9 @@ directory. This includes:
   - variable_paths - number of test cases showing variable behavior
   - unique_crashes - number of unique crashes recorded
   - unique_hangs   - number of unique hangs encountered
+  - command_line   - full command line used for the fuzzing session
+  - slowest_exec_ms- real time of the slowest execution in ms
+  - peak_rss_mb    - max rss usage reached during fuzzing in mb
 
 Most of these map directly to the UI elements discussed earlier on.
 
